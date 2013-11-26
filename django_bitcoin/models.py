@@ -386,25 +386,8 @@ class BitcoinAddress(models.Model):
 
 
 def new_bitcoin_address():
-    while True:
-        with db_transaction.autocommit():
-            db_transaction.enter_transaction_management()
-            db_transaction.commit()
-            bp = BitcoinAddress.objects.filter(Q(active=False) & Q(wallet__isnull=True) & \
-                    Q(least_received__lte=0))
-            if len(bp) < 1:
-                refill_payment_queue()
-                db_transaction.commit()
-                print "refilling queue...", bp
-            else:
-                bp = bp[0]
-                updated = BitcoinAddress.objects.select_for_update().filter(Q(id=bp.id) & Q(active=False) & Q(wallet__isnull=True) & \
-                    Q(least_received__lte=0)).update(active=True)
-                db_transaction.commit()
-                if updated:
-                    return bp
-                else:
-                    print "wallet transaction concurrency:", bp.address
+    bp = BitcoinAddress.objects.create(address = bitcoind.create_address(), active=True)
+    return bp
 
 
 class Payment(models.Model):
@@ -659,21 +642,14 @@ class Wallet(models.Model):
         #super(Wallet, self).save(*args, **kwargs)
 
     def receiving_address(self, fresh_addr=True):
-        while True:
-            usable_addresses = self.addresses.filter(active=True).order_by("id")
-            if fresh_addr:
-                usable_addresses = usable_addresses.filter(least_received=Decimal(0))
-            if usable_addresses.count():
-                return usable_addresses[0].address
-            addr = new_bitcoin_address()
-            updated = BitcoinAddress.objects.select_for_update().filter(Q(id=addr.id) & Q(active=True) & Q(least_received__lte=0) & Q(wallet__isnull=True))\
-                          .update(active=True, wallet=self)
-            print "addr_id", addr.id, updated
-            # db_transaction.commit()
-            if updated:
-                return addr.address
-            else:
-                raise Exception("Concurrency error!")
+        usable_addresses = self.addresses.filter(active=True).order_by("id")
+        if fresh_addr:
+            usable_addresses = usable_addresses.filter(least_received=Decimal(0))
+        if usable_addresses.count():
+            return usable_addresses[0].address
+        addr = BitcoinAddress.objects.create(address = bitcoind.create_address(), active=True, wallet=self)
+        print "addr_id", addr.id, updated
+        return addr.address
 
     def static_receiving_address(self):
         ''' Returns a static receiving address for this Wallet object.'''
